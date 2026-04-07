@@ -1,0 +1,118 @@
+local Movement = {}
+
+local RunService = game:GetService("RunService")
+
+local ARRIVAL_THRESHOLD = 8
+local STUCK_CHECK_INTERVAL = 0.5  -- seconds between position samples
+local STUCK_DISTANCE = 0.5        -- movement required to not be stuck
+local STUCK_THRESHOLD = 1.0       -- seconds of no movement before spinning
+local SPIN_SPEED = 4              -- radians per second while stuck
+
+function Movement.FollowPath(character, points, speed)
+	local hrp = character:WaitForChild("HumanoidRootPart")
+
+	for _, name in { "LV", "LV_Att", "LV_Align" } do
+		local inst = hrp:FindFirstChild(name)
+		if inst then inst:Destroy() end
+	end
+
+	local att = Instance.new("Attachment")
+	att.Name = "LV_Att"
+	att.Parent = hrp
+
+	local lv = Instance.new("LinearVelocity")
+	lv.Name = "LV"
+	lv.Attachment0 = att
+	lv.MaxForce = 100000
+	lv.RelativeTo = Enum.ActuatorRelativeTo.World
+	lv.Parent = hrp
+
+	local align = Instance.new("AlignOrientation")
+	align.Name = "LV_Align"
+	align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	align.Attachment0 = att
+	align.RigidityEnabled = true
+	align.MaxTorque = math.huge
+	align.Responsiveness = 50
+	align.Parent = hrp
+
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+	if humanoid then
+		humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+	end
+
+	local currentIndex = 1
+	local connection
+
+	-- stuck detection state
+	local lastSamplePos = hrp.Position
+	local sampleTimer = 0
+	local stuckTimer = 0
+	local isStuck = false
+	local spinAngle = 0
+
+	local function cleanup()
+		connection:Disconnect()
+		lv:Destroy()
+		att:Destroy()
+		align:Destroy()
+		if humanoid then
+			humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+		end
+	end
+
+	connection = RunService.Heartbeat:Connect(function(dt)
+		if not character or not character.Parent then
+			cleanup()
+			return
+		end
+
+		local targetPos = points[currentIndex]
+		if not targetPos then
+			cleanup()
+			return
+		end
+
+		-- sample position every interval to detect if we've stalled
+		sampleTimer += dt
+		if sampleTimer >= STUCK_CHECK_INTERVAL then
+			local moved = (hrp.Position - lastSamplePos).Magnitude
+			if moved < STUCK_DISTANCE then
+				stuckTimer += sampleTimer
+				if stuckTimer >= STUCK_THRESHOLD then
+					isStuck = true
+				end
+			else
+				stuckTimer = 0
+				isStuck = false
+			end
+			lastSamplePos = hrp.Position
+			sampleTimer = 0
+		end
+
+		if isStuck then
+			-- spin velocity direction until we break free
+			spinAngle += SPIN_SPEED * dt
+			local spinDir = Vector3.new(math.cos(spinAngle), 0, math.sin(spinAngle))
+			lv.VectorVelocity = spinDir * speed
+			align.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + spinDir)
+			return
+		end
+
+		local dir = targetPos - hrp.Position
+		local dist = dir.Magnitude
+
+		if dist < ARRIVAL_THRESHOLD then
+			currentIndex += 1
+			return
+		end
+
+		local unitDir = dir.Unit
+		lv.VectorVelocity = unitDir * speed
+		align.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + unitDir)
+	end)
+
+	return lv
+end
+
+return Movement
