@@ -51,12 +51,12 @@ function Movement.FollowPath(character, points, speed, options)
 	att.Name = INSTANCE_NAMES.Attachment
 	att.Parent = hrp
 
-	-- LinearVelocity – only X/Z axes are forced; Y is left to gravity and terrain
+	-- LinearVelocity – Y mirrors the assembly's current velocity each frame
+	-- so we never fight gravity or terrain, only steer horizontally
 	local lv = Instance.new("LinearVelocity")
 	lv.Name = INSTANCE_NAMES.LinearVelocity
 	lv.Attachment0 = att
-	lv.ForceLimitsEnabled = true
-	lv.MaxAxesForce = Vector3.new(math.huge, 0, math.huge)
+	lv.MaxForce = math.huge
 	lv.RelativeTo = Enum.ActuatorRelativeTo.World
 	lv.VectorVelocity = Vector3.zero
 	lv.Parent = hrp
@@ -122,7 +122,8 @@ function Movement.FollowPath(character, points, speed, options)
 			or speed
 
 		dir = dir.Unit
-		lv.VectorVelocity = dir * appliedSpeed
+		local currentYVelocity = hrp.AssemblyLinearVelocity.Y
+		lv.VectorVelocity = Vector3.new(dir.X * appliedSpeed, currentYVelocity, dir.Z * appliedSpeed)
 
 		-- Face travel direction
 		align.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + dir)
