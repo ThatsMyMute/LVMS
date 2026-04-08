@@ -1,0 +1,143 @@
+local Movement = {}
+
+local RunService = game:GetService("RunService")
+
+local INSTANCE_NAMES = {
+	Attachment    = "LV_Att",
+	LinearVelocity = "LV",
+	AlignOrientation = "LV_Align",
+}
+
+local function cleanup(hrp, humanoid)
+	for _, name in INSTANCE_NAMES do
+		local inst = hrp:FindFirstChild(name)
+		if inst then inst:Destroy() end
+	end
+
+	if humanoid and humanoid.Parent then
+		humanoid:ChangeState(Enum.HumanoidStateType.GettingUp)
+	end
+end
+
+--[[
+	Moves `character` through a list of Vector3 `points` at `speed` studs/s.
+
+	Options (all optional):
+	  reachRadius  – distance at which a waypoint is considered reached (default 3)
+	  slowRadius   – distance at which the character begins to decelerate (default 10)
+	  onComplete   – called with no arguments when the final waypoint is reached
+	  onCancelled  – called with no arguments if Cancel() is called before completion
+
+	Returns a handle:
+	  handle.Cancel() – immediately stops movement and cleans up
+]]
+function Movement.FollowPath(character, points, speed, options)
+	assert(type(speed) == "number" and speed > 0, "speed must be a positive number")
+	assert(type(points) == "table" and #points > 0, "points must be a non-empty array")
+
+	options = options or {}
+	local reachRadius = options.reachRadius or 3
+	local slowRadius  = options.slowRadius  or 10
+	local onComplete  = options.onComplete
+	local onCancelled = options.onCancelled
+
+	local hrp = character:WaitForChild("HumanoidRootPart")
+	local humanoid = character:FindFirstChildOfClass("Humanoid")
+
+	cleanup(hrp, humanoid)
+
+	-- Attachment
+	local att = Instance.new("Attachment")
+	att.Name = INSTANCE_NAMES.Attachment
+	att.Parent = hrp
+
+	-- LinearVelocity – only X/Z axes are forced; Y is left to gravity and terrain
+	local lv = Instance.new("LinearVelocity")
+	lv.Name = INSTANCE_NAMES.LinearVelocity
+	lv.Attachment0 = att
+	lv.ForceLimitsEnabled = true
+	lv.MaxAxesForce = Vector3.new(math.huge, 0, math.huge)
+	lv.RelativeTo = Enum.ActuatorRelativeTo.World
+	lv.VectorVelocity = Vector3.zero
+	lv.Parent = hrp
+
+	-- AlignOrientation – keeps the character upright and facing travel direction
+	local align = Instance.new("AlignOrientation")
+	align.Name = INSTANCE_NAMES.AlignOrientation
+	align.Mode = Enum.OrientationAlignmentMode.OneAttachment
+	align.Attachment0 = att
+	align.RigidityEnabled = true
+	align.MaxTorque = math.huge
+	align.Responsiveness = 50
+	align.Parent = hrp
+
+	if humanoid then
+		humanoid:ChangeState(Enum.HumanoidStateType.Physics)
+	end
+
+	local currentIndex = 1
+	local cancelled = false
+	local connection
+
+	local function stop(completed)
+		if connection then
+			connection:Disconnect()
+			connection = nil
+		end
+		cleanup(hrp, humanoid)
+
+		if completed and onComplete then
+			onComplete()
+		elseif not completed and cancelled and onCancelled then
+			onCancelled()
+		end
+	end
+
+	connection = RunService.Heartbeat:Connect(function()
+		-- Guard: character removed mid-path
+		if not character or not character.Parent then
+			stop(false)
+			return
+		end
+
+		local targetPos = points[currentIndex]
+		if not targetPos then
+			stop(true)
+			return
+		end
+
+		-- Ignore Y difference so distance check is purely horizontal
+		local flatTarget = Vector3.new(targetPos.X, hrp.Position.Y, targetPos.Z)
+		local dir        = flatTarget - hrp.Position
+		local dist       = dir.Magnitude
+
+		if dist < reachRadius then
+			currentIndex += 1
+			return
+		end
+
+		-- Decelerate when approaching a waypoint
+		local appliedSpeed = dist < slowRadius
+			and speed * (dist / slowRadius)
+			or speed
+
+		dir = dir.Unit
+		lv.VectorVelocity = dir * appliedSpeed
+
+		-- Face travel direction
+		align.CFrame = CFrame.lookAt(hrp.Position, hrp.Position + dir)
+	end)
+
+	local handle = {}
+
+	function handle.Cancel()
+		if connection then
+			cancelled = true
+			stop(false)
+		end
+	end
+
+	return handle
+end
+
+return Movement
